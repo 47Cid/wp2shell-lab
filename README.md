@@ -78,44 +78,58 @@ The actual HTTP request:
 
 How the arrays misalign:
 
+`serve_batch_request_v1()` processes sub-requests in two loops. The first
+loop validates every sub-request and builds `$matches[]` and `$validation[]`.
+The second loop dispatches each sub-request using `$matches[$i]` as the
+handler. Because the primer's error is missing from `$matches`, the second
+loop pairs each request with the wrong handler.
+
 ```
 POST /?rest_route=/batch/v1  (anonymous, no auth)
 |
 v
 OUTER BATCH
-+------------------------------------------------------------------+
-|                                                                  |
-|  sub-requests:                                                   |
-|    [0]  "http://"           fails wp_parse_url()                 |
-|    [1]  POST /wp/v2/posts   body carries inner batch             |
-|    [2]  POST /batch/v1      supplies batch handler               |
-|                                                                  |
-|  $validation:  [ error,  OK(posts),     OK(batch)     ]          |
-|  $matches:     [         posts_handler, batch_handler  ]         |
-|                 ^                                                |
-|                 error skipped in $matches, arrays misalign       |
-|                                                                  |
-|  dispatch: request[1] gets $matches[1] (batch handler)           |
-|            posts body executed as a nested batch                  |
-+------------------------------------------------------------------+
-                           |
-                           v
-INNER BATCH  (recursive serve_batch_request_v1)
-+------------------------------------------------------------------+
-|                                                                  |
-|  sub-requests:                                                   |
-|    [0]  "http://"           same desync trick                    |
-|    [1]  POST /categories    author_exclude=<SQLI>                |
-|    [2]  GET  /wp/v2/posts   supplies posts handler               |
-|                                                                  |
-|  same misalignment:                                              |
-|  request[1] (categories) gets $matches[1] (posts get_items)     |
-|                                                                  |
-|  categories has no author_exclude -> passes unsanitized          |
-|  posts get_items maps it to WP_Query::author__not_in             |
-|                                                                  |
-|  -> SQL INJECTION                                                |
-+------------------------------------------------------------------+
++--------------------------------------------------------------+
+|                                                              |
+|  Loop 1 (validate):                                          |
+|    [0] "http://"          -> wp_parse_url fails              |
+|    [1] POST /wp/v2/posts  -> match: posts_handler           |
+|    [2] POST /batch/v1     -> match: batch_handler            |
+|                                                              |
+|  $validation:  [ error,  OK(posts),     OK(batch)    ]       |
+|  $matches:     [         posts_handler, batch_handler ]      |
+|                 ^                                            |
+|                 error skipped in $matches                    |
+|                                                              |
+|  Loop 2 (dispatch):                                          |
+|    i=0: error -> skip                                        |
+|    i=1: POST /posts  uses $matches[1] = batch_handler        |
+|         -> posts body executed as a nested batch             |
+|    i=2: POST /batch  uses $matches[2] = out of bounds        |
+|                                                              |
++--------------------------------------------------------------+
+                          |
+                          v
+INNER BATCH (recursive serve_batch_request_v1)
++--------------------------------------------------------------+
+|                                                              |
+|  Loop 1 (validate):                                          |
+|    [0] "http://"            -> wp_parse_url fails            |
+|    [1] POST /categories     -> match: categories_handler     |
+|    [2] GET  /wp/v2/posts    -> match: posts_handler          |
+|                                                              |
+|  $validation:  [ error,  OK(cats),         OK(posts)    ]    |
+|  $matches:     [         categories_handler, posts_handler ] |
+|                                                              |
+|  Loop 2 (dispatch):                                          |
+|    i=0: error -> skip                                        |
+|    i=1: POST /categories uses $matches[1] = posts_handler    |
+|         -> categories request handled by posts get_items()   |
+|         -> author_exclude not in cats schema, unsanitized    |
+|         -> posts maps it to WP_Query::author__not_in         |
+|         -> SQL INJECTION                                     |
+|                                                              |
++--------------------------------------------------------------+
 ```
 
 ## Fast extraction via X-WP-Total bitmask oracle
