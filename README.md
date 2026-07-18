@@ -121,7 +121,7 @@ loop pairs each request with the wrong handler.
 POST /?rest_route=/batch/v1  (anonymous, no auth)
 |
 v
-OUTER BATCH
+THE REQUEST YOU SEND
 +--------------------------------------------------------------+
 |                                                              |
 |  Loop 1 (validate):                                          |
@@ -143,7 +143,7 @@ OUTER BATCH
 +--------------------------------------------------------------+
                           |
                           v
-INNER BATCH (recursive serve_batch_request_v1)
+NESTED BATCH (serve_batch_request_v1 calls itself on the body above)
 +--------------------------------------------------------------+
 |                                                              |
 |  Loop 1 (validate):                                          |
