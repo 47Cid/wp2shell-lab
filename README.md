@@ -126,7 +126,7 @@ OUTER BATCH
 |                                                              |
 |  Loop 1 (validate):                                          |
 |    [0] "http://"          -> wp_parse_url fails              |
-|    [1] POST /wp/v2/posts  -> match: posts_handler           |
+|    [1] POST /wp/v2/posts  -> match: posts_handler            |
 |    [2] POST /batch/v1     -> match: batch_handler            |
 |                                                              |
 |  $validation:  [ error,  OK(posts),     OK(batch)    ]       |
